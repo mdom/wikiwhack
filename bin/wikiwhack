@@ -2,7 +2,7 @@
 use Mojo::Base -signatures, -strict;
 
 use Mojo::UserAgent;
-use Mojo::File 'path';
+use Mojo::File qw(tempfile path);
 use Mojo::Util qw(encode decode);
 
 sub load_config {
@@ -39,6 +39,22 @@ elsif ( $mode eq 'cat' ) {
     if ( my $page = page(shift) ) {
         say encode( 'UTF-8', $page->{text} );
     }
+}
+elsif ( $mode eq 'edit' ) {
+    my $title = shift;
+    if ( my $page = page($title) ) {
+    use Data::Dumper;
+    die Dumper $page;
+        my $current_text = decode('UTF-8', $page->{text});
+        my $file = tempfile;
+        $file->spurt( encode( 'UTF-8', $current_text ));
+        system('vi', $file);
+        my $new_text = decode('UTF-8', $file->slurp);
+        if ( $current_text ne $new_text ) {
+            save( $title, $new_text );
+        }
+    }
+    
 }
 exit 0;
 
