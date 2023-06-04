@@ -1,0 +1,224 @@
+#/usr/bin/perl
+use Mojo::Base -signatures, -strict;
+
+use Mojo::UserAgent;
+use Mojo::File 'path';
+use Mojo::Util qw(encode decode);
+
+sub load_config {
+    my ($file) = @_;
+    my $content = decode( 'UTF-8', path($file)->slurp );
+
+    # Run Perl code in sandbox
+    my $config =
+      eval 'package Mojolicious::Plugin::Config::Sandbox; no warnings;'
+      . "use Mojo::Base -strict; $content";
+    die qq{Can't load configuration from file "$file": $@} if $@;
+    die qq{Configuration file "$file" did not return a hash reference}
+      unless ref $config eq 'HASH';
+
+    return $config;
+}
+
+my $config   = load_config("$ENV{HOME}/.wikiwhack.cfg");
+my $base_url = Mojo::URL->new( $config->{base_url} );
+my $ua       = Mojo::UserAgent->new;
+
+my $apikey = $config->{apikey} || $ENV{REDMINE_APIKEY};
+$base_url->query( key => $apikey );
+
+my $mode = shift;
+
+if ( $mode eq 'ls' ) {
+    say $_->{title} for pages();
+}
+elsif ( $mode eq 'search' ) {
+    search(shift);
+}
+elsif ( $mode eq 'cat' ) {
+    if ( my $page = page(shift) ) {
+        say encode( 'UTF-8', $page->{text} );
+    }
+}
+exit 0;
+
+sub get ( $path, %parameters ) {
+    my $url = $base_url->clone->path($path);
+    if (%parameters) {
+        $url->query->merge(%parameters);
+    }
+    my $res =
+      $ua->get( $url => { 'Content-Type' => 'application/json' } )->result;
+    if ( $res->code == 401 ) {
+        die "Authentication failed.\n";
+    }
+    if ( $res->is_error ) {
+        $url->query->pairs( [] );
+        die "$url: " . $res->message . ".\n";
+    }
+    return $res;
+}
+
+sub save ( $title, $text, $version = undef ) {
+    my $url = $base_url->clone->path("wiki/$title.json");
+
+    my $res = $ua->put(
+        $url => json => {
+            wiki_page =>
+              { text => $text, ( $version ? ( version => $version ) : () ) }
+        }
+    )->result;
+
+    if ( $res->is_success ) {
+        return 1;
+    }
+    elsif ( $res->code == 409 ) {
+        return 0;
+    }
+    die( 'Error saving wiki page: ' . $res->message );
+}
+
+sub attach_files ( $title, @files ) {
+    my $url = $base_url->clone->path("/uploads.json");
+    my @tokens;
+    for my $file (@files) {
+        my $asset = Mojo::Asset::File->new( path => $file );
+        my $post  = $ua->build_tx(
+            POST => $url => { 'Content-Type' => 'application/octet-stream' } );
+        $post->req->content->asset($asset);
+        my $tx = $ua->start($post);
+        push @tokens,
+          {
+            token    => $tx->res->json->{upload}->{token},
+            filename => path($file)->basename
+          };
+    }
+    my $page_url = $base_url->clone->path("wiki/$title.json");
+    my $page     = get($title);
+    my $res      = $ua->put(
+        $page_url => json => {
+            wiki_page => {
+                text    => $page->{text},
+                version => $page->{version},
+                uploads => \@tokens
+            }
+        }
+    )->result;
+
+    if ( $res->is_success ) {
+        return 1;
+    }
+    elsif ( $res->code == 422 ) {
+        return 0;
+    }
+    elsif ( $res->code == 409 ) {
+        next;
+    }
+    die "Unknown response code from server: " . $res->code . "\n";
+}
+
+sub delete_attachment ($id) {
+    my $url = $base_url->clone->path("/attachments/$id.json");
+    my $res = $ua->delete($url)->result;
+    if ( !$res->is_success ) {
+        return $res->message;
+    }
+    return;
+}
+
+sub delete ($title) {
+    my $url = $base_url->clone->path("wiki/$title.json");
+    my $res = $ua->delete($url)->result;
+    if ( !$res->is_success ) {
+        return $res->message;
+    }
+    return;
+}
+
+sub pages {
+    my $res = get("wiki/index.json");
+    @{ $res->json->{wiki_pages} };
+}
+
+sub page ( $title, $version = undef ) {
+    my $url = $version ? "wiki/$title/$version.json" : "wiki/$title.json";
+    my $res = get($url);
+    if ( $res->is_success ) {
+        return $res->json->{wiki_page};
+    }
+}
+
+sub projects ($self) {
+    my $res = get(
+        "/projects.json",
+        include => 'enabled_modules',
+        limit   => 100,
+        offset  => 0,
+    );
+    return if !$res->is_success;
+    my $data     = $res->json;
+    my @projects = @{ $data->{projects} };
+
+    return if !@projects;
+
+    my $total_count = $data->{total_count};
+    my $offset      = $data->{offset};
+
+    while ( $total_count != @projects ) {
+        my $res = get(
+            "/projects.json",
+            include => 'enabled_modules',
+            limit   => 100,
+            offset  => $offset + 100,
+        );
+        return if !$res->is_success;
+        my $data = $res->json;
+        $offset = $data->{offset};
+        push @projects, @{ $data->{projects} };
+    }
+
+    my @result;
+  PROJECT:
+    for my $project (@projects) {
+        for my $module ( @{ $project->{enabled_modules} } ) {
+            if ( $module->{name} eq 'wiki' ) {
+                push @result, $project->{identifier};
+                next PROJECT;
+            }
+        }
+    }
+
+    return \@result;
+}
+
+sub _search ( $query, $offset = 0 ) {
+    my $res = get(
+        "search.json",
+        q          => $query,
+        wiki_pages => 1,
+        limit      => 100,
+        offset     => $offset,
+    );
+    return if !$res->is_success;
+    return $res->json;
+}
+
+sub search ($query) {
+    my $data = _search($query);
+    return if !$data;
+    my @results = @{ $data->{results} };
+
+    return if !@results;
+
+    my $total_count = $data->{total_count};
+    my $offset      = $data->{offset};
+    while ( $total_count != @results ) {
+        my $data = _search( $query, $offset + 100 );
+        last if !$data;
+        $offset = $data->{offset};
+        push @results, @{ $data->{results} };
+    }
+    say for map { $_->{title} =~ /^Wiki: (.*)/ } @results;
+}
+
+1;
