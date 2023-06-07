@@ -1,240 +1,84 @@
-#/usr/bin/perl
-use Mojo::Base -signatures, -strict;
+#!/bin/sh
 
-use Mojo::UserAgent;
-use Mojo::File qw(tempfile path);
-use Mojo::Util qw(encode decode);
+base_url=""
 
-sub load_config {
-    my ($file) = @_;
-    my $content = decode( 'UTF-8', path($file)->slurp );
+if [ -e "$HOME/.wikiwhackrc" ]; then
+    . "$HOME/.wikiwhackrc"
+fi
 
-    # Run Perl code in sandbox
-    my $config =
-      eval 'package Mojolicious::Plugin::Config::Sandbox; no warnings;'
-      . "use Mojo::Base -strict; $content";
-    die qq{Can't load configuration from file "$file": $@} if $@;
-    die qq{Configuration file "$file" did not return a hash reference}
-      unless ref $config eq 'HASH';
+if [ -z "$base_url" ]; then
+    printf "Config parameter base_url is not set." >&2
+    exit 1
+fi
 
-    return $config;
+get(){
+    curl -sS -H "Content-Type: application/json" "$base_url/wiki/$1.json?key=$REDMINE_APIKEY"
 }
 
-my $config   = load_config("$ENV{HOME}/.wikiwhack.cfg");
-my $base_url = Mojo::URL->new( $config->{base_url} );
-my $ua       = Mojo::UserAgent->new;
-
-my $apikey = $config->{apikey} || $ENV{REDMINE_APIKEY};
-$base_url->query( key => $apikey );
-
-my $mode = shift;
-
-if ( $mode eq 'ls' ) {
-    say $_->{title} for pages();
-}
-elsif ( $mode eq 'search' ) {
-    search(shift);
-}
-elsif ( $mode eq 'cat' ) {
-    if ( my $page = page(shift) ) {
-        say encode( 'UTF-8', $page->{text} );
-    }
-}
-elsif ( $mode eq 'edit' ) {
-    my $title = shift;
-    if ( my $page = page($title) ) {
-    use Data::Dumper;
-    die Dumper $page;
-        my $current_text = decode('UTF-8', $page->{text});
-        my $file = tempfile;
-        $file->spurt( encode( 'UTF-8', $current_text ));
-        system('vi', $file);
-        my $new_text = decode('UTF-8', $file->slurp);
-        if ( $current_text ne $new_text ) {
-            save( $title, $new_text );
-        }
-    }
-    
-}
-exit 0;
-
-sub get ( $path, %parameters ) {
-    my $url = $base_url->clone->path($path);
-    if (%parameters) {
-        $url->query->merge(%parameters);
-    }
-    my $res =
-      $ua->get( $url => { 'Content-Type' => 'application/json' } )->result;
-    if ( $res->code == 401 ) {
-        die "Authentication failed.\n";
-    }
-    if ( $res->is_error ) {
-        $url->query->pairs( [] );
-        die "$url: " . $res->message . ".\n";
-    }
-    return $res;
+put(){
+    curl -sS --request PUT --data-binary @- -H "Content-Type: application/json" "$base_url/wiki/$1.json?key=$REDMINE_APIKEY"
 }
 
-sub save ( $title, $text, $version = undef ) {
-    my $url = $base_url->clone->path("wiki/$title.json");
-
-    my $res = $ua->put(
-        $url => json => {
-            wiki_page =>
-              { text => $text, ( $version ? ( version => $version ) : () ) }
-        }
-    )->result;
-
-    if ( $res->is_success ) {
-        return 1;
-    }
-    elsif ( $res->code == 409 ) {
-        return 0;
-    }
-    die( 'Error saving wiki page: ' . $res->message );
+_search(){
+    curl -sS --get -H "Content-Type: application/json" "$base_url/search.json?key=$REDMINE_APIKEY" -d "q=$1" -d "offset=$2" -d "limit=$3"
 }
 
-sub attach_files ( $title, @files ) {
-    my $url = $base_url->clone->path("/uploads.json");
-    my @tokens;
-    for my $file (@files) {
-        my $asset = Mojo::Asset::File->new( path => $file );
-        my $post  = $ua->build_tx(
-            POST => $url => { 'Content-Type' => 'application/octet-stream' } );
-        $post->req->content->asset($asset);
-        my $tx = $ua->start($post);
-        push @tokens,
-          {
-            token    => $tx->res->json->{upload}->{token},
-            filename => path($file)->basename
-          };
-    }
-    my $page_url = $base_url->clone->path("wiki/$title.json");
-    my $page     = get($title);
-    my $res      = $ua->put(
-        $page_url => json => {
-            wiki_page => {
-                text    => $page->{text},
-                version => $page->{version},
-                uploads => \@tokens
-            }
-        }
-    )->result;
-
-    if ( $res->is_success ) {
-        return 1;
-    }
-    elsif ( $res->code == 422 ) {
-        return 0;
-    }
-    elsif ( $res->code == 409 ) {
-        next;
-    }
-    die "Unknown response code from server: " . $res->code . "\n";
+get_titles(){
+    get 'index' | jq -r '.wiki_pages|.[]|.title'
 }
 
-sub delete_attachment ($id) {
-    my $url = $base_url->clone->path("/attachments/$id.json");
-    my $res = $ua->delete($url)->result;
-    if ( !$res->is_success ) {
-        return $res->message;
-    }
-    return;
+get_text(){
+    get "$1" | jq -r '.wiki_page|.text'
 }
 
-sub delete ($title) {
-    my $url = $base_url->clone->path("wiki/$title.json");
-    my $res = $ua->delete($url)->result;
-    if ( !$res->is_success ) {
-        return $res->message;
-    }
-    return;
+edit_page(){
+    get_text "$1" > .wikiwhack.$$.tmp
+    $EDITOR .wikiwhack.$$.tmp < /dev/tty
+    jq --slurp -R '{"wiki_page": { "text": . }}' < .wikiwhack.$$.tmp | put foo
+    rm .wikiwhack.$$.tmp
 }
 
-sub pages {
-    my $res = get("wiki/index.json");
-    @{ $res->json->{wiki_pages} };
+search(){
+        if [ -z "$1" ]; then
+            get_titles
+        fi
+        total_count=$( _search "$1" 0 1 | jq '(.total_count//0)')
+
+        if [ "$total_count" -eq 0 ]; then
+            return
+        fi
+
+        offset=0
+        while [ "$offset" -lt "$total_count" ]; do
+            _search "$1" $offset 100 | jq -r '.results|.[]|.title'|sed 's/^Wiki: //' >> .wikiwhack.$$.tmp
+            offset=$(( offset + 100 ))
+        done
+
+        cat .wikiwhack.$$.tmp
+        rm .wikiwhack.$$.tmp
 }
 
-sub page ( $title, $version = undef ) {
-    my $url = $version ? "wiki/$title/$version.json" : "wiki/$title.json";
-    my $res = get($url);
-    if ( $res->is_success ) {
-        return $res->json->{wiki_page};
-    }
-}
-
-sub projects ($self) {
-    my $res = get(
-        "/projects.json",
-        include => 'enabled_modules',
-        limit   => 100,
-        offset  => 0,
-    );
-    return if !$res->is_success;
-    my $data     = $res->json;
-    my @projects = @{ $data->{projects} };
-
-    return if !@projects;
-
-    my $total_count = $data->{total_count};
-    my $offset      = $data->{offset};
-
-    while ( $total_count != @projects ) {
-        my $res = get(
-            "/projects.json",
-            include => 'enabled_modules',
-            limit   => 100,
-            offset  => $offset + 100,
-        );
-        return if !$res->is_success;
-        my $data = $res->json;
-        $offset = $data->{offset};
-        push @projects, @{ $data->{projects} };
-    }
-
-    my @result;
-  PROJECT:
-    for my $project (@projects) {
-        for my $module ( @{ $project->{enabled_modules} } ) {
-            if ( $module->{name} eq 'wiki' ) {
-                push @result, $project->{identifier};
-                next PROJECT;
-            }
-        }
-    }
-
-    return \@result;
-}
-
-sub _search ( $query, $offset = 0 ) {
-    my $res = get(
-        "search.json",
-        q          => $query,
-        wiki_pages => 1,
-        limit      => 100,
-        offset     => $offset,
-    );
-    return if !$res->is_success;
-    return $res->json;
-}
-
-sub search ($query) {
-    my $data = _search($query);
-    return if !$data;
-    my @results = @{ $data->{results} };
-
-    return if !@results;
-
-    my $total_count = $data->{total_count};
-    my $offset      = $data->{offset};
-    while ( $total_count != @results ) {
-        my $data = _search( $query, $offset + 100 );
-        last if !$data;
-        $offset = $data->{offset};
-        push @results, @{ $data->{results} };
-    }
-    say for map { $_->{title} =~ /^Wiki: (.*)/ } @results;
-}
-
-1;
+case $1 in
+    edit ) 
+        edit_page "$2"
+        ;;
+    search )
+        search "$2"
+        ;;
+    titles )
+        get_titles
+        ;;
+    cat )
+        get_text "$2"
+        ;;
+    "")
+        get_titles | fzf \
+            --preview="$0 cat {}" \
+            --layout reverse \
+            --bind "enter:toggle-preview" \
+            --bind "ctrl-s:reload#$0 search {q}#+clear-query" \
+            --bind "ctrl-e:execute:$0 edit {}" \
+            --preview-window hidden \
+            --header 'CTRL-E:edit CTRL-S:search CTRL-Q:quit ENTER:preview'
+        ;;
+esac
