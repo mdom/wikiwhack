@@ -3,6 +3,7 @@
 base_url=""
 
 if [ -e "$HOME/.wikiwhackrc" ]; then
+    # shellcheck disable=SC1091
     . "$HOME/.wikiwhackrc"
 fi
 
@@ -23,15 +24,12 @@ _search(){
     curl -sS --get -H "Content-Type: application/json" "$base_url/search.json?key=$REDMINE_APIKEY" -d "q=$1" -d "offset=$2" -d "limit=$3"
 }
 
-esc=$(printf '\033')
-bold="${esc}[1m"
-normal="${esc}[0m"
-
 filter_page(){
     awk '
         BEGIN {
-            bold   = "\x1b[1m"
-            normal = "\x1b[0m"
+            escape = ""
+            bold   = escape "[1m"
+            normal = escape "[0m"
         }
         /^h[0-9]\([^)]+\)\./{
             sub(/\([^)]+\)/, "")
@@ -56,45 +54,53 @@ cat_page(){
     get_text "$1" |filter_page
 }
 
-less_page(){
-    get_text "$1" |filter_page > .wikiwhack.$$.tmp
-    less -R .wikiwhack.$$.tmp
-    rm .wikiwhack.$$.tmp
+view_page(){
+    _tmp=$HOME/.wikiwhack.$$.less.tmp
+    get_text "$1" |filter_page > "$_tmp"
+    LESSEDIT="$0 edit '$1'" less -R "$_tmp"
+    rm "$_tmp"
 }
 
 edit_page(){
-    get_text "$1" > .wikiwhack.$$.tmp
-    $EDITOR .wikiwhack.$$.tmp < /dev/tty
-    jq --slurp -R '{"wiki_page": { "text": . }}' < .wikiwhack.$$.tmp | put "$1"
-    rm .wikiwhack.$$.tmp
+    _tmp=$HOME/.wikiwhack.$$.edit.tmp
+    get_text "$1" > "$_tmp"
+    cp "$_tmp" "$_tmp~"
+    $EDITOR "$_tmp" < /dev/tty
+
+    if ! diff -q "$_tmp" "$_tmp~" > /dev/null ; then
+        jq --slurp -R '{"wiki_page": { "text": . }}' < "$_tmp" | put "$1"
+    fi
+
+    rm -f "$_tmp" "$_tmp~"
 }
 
 search(){
-        if [ -z "$1" ]; then
-            get_titles
-        fi
-        total_count=$( _search "$1" 0 1 | jq '(.total_count//0)')
+    _tmp=$HOME/.wikiwhack.$$.search.tmp
+    if [ -z "$1" ]; then
+        get_titles
+    fi
+    total_count=$( _search "$1" 0 1 | jq '(.total_count//0)')
 
-        if [ "$total_count" -eq 0 ]; then
-            return
-        fi
+    if [ "$total_count" -eq 0 ]; then
+        return
+    fi
 
-        offset=0
-        while [ "$offset" -lt "$total_count" ]; do
-            _search "$1" $offset 100 | jq -r '.results|.[]|.title'|sed 's/^Wiki: //' >> .wikiwhack.$$.tmp
-            offset=$(( offset + 100 ))
-        done
+    offset=0
+    while [ "$offset" -lt "$total_count" ]; do
+        _search "$1" $offset 100 | jq -r '.results|.[]|.title'|sed 's/^Wiki: //' >> "$_tmp"
+        offset=$(( offset + 100 ))
+    done
 
-        cat .wikiwhack.$$.tmp
-        rm .wikiwhack.$$.tmp
+    cat "$_tmp"
+    rm "$_tmp"
 }
 
 case $1 in
     edit ) 
         edit_page "$2"
         ;;
-    less ) 
-        less_page "$2"
+    view ) 
+        view_page "$2"
         ;;
     search )
         search "$2"
@@ -108,17 +114,18 @@ case $1 in
     "")
         get_titles | fzf \
             --preview="$0 cat {}" \
-            --layout=reverse \
             --bind="enter:toggle-preview" \
-            --bind="ctrl-s:reload#$0 search {q}#+clear-query" \
-            --bind="ctrl-e:execute:$0 edit {}" \
-            --bind="ctrl-l:execute:$0 less {}" \
-            --bind="ctrl-j:preview-half-page-down" \
-            --bind="ctrl-k:preview-half-page-up" \
-            --color="header:bold" \
+            --bind="alt-s:reload#$0 search {q}#+clear-query" \
+            --bind="alt-c:execute#$0 edit {q}#+reload:$0 titles" \
+            --bind="alt-e:execute:$0 edit {}" \
+            --bind="alt-v:execute:$0 view {}" \
+            --bind="alt-j:preview-half-page-down" \
+            --bind="alt-k:preview-half-page-up" \
+            --bind="alt-q:abort" \
+            --color="header:reverse" \
             --info=inline \
             --ansi \
             --preview-window=hidden \
-            --header='C-e:edit C-s:search C-l:less ENTER:preview C-q:quit'
+            --header='M-e:edit M-s:search M-v:less ENTER:preview M-q:quit'
         ;;
 esac
