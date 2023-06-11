@@ -23,6 +23,27 @@ _search(){
     curl -sS --get -H "Content-Type: application/json" "$base_url/search.json?key=$REDMINE_APIKEY" -d "q=$1" -d "offset=$2" -d "limit=$3"
 }
 
+esc=$(printf '\033')
+bold="${esc}[1m"
+normal="${esc}[0m"
+
+filter_page(){
+    awk '
+        BEGIN {
+            bold   = "\x1b[1m"
+            normal = "\x1b[0m"
+        }
+        /^h[0-9]\([^)]+\)\./{
+            sub(/\([^)]+\)/, "")
+        }
+        /^h[0-9]./{
+            print bold $0 normal
+            next
+        }
+        {print}
+    '
+}
+
 get_titles(){
     get 'index' | jq -r '.wiki_pages|.[]|.title'
 }
@@ -31,10 +52,20 @@ get_text(){
     get "$1" | jq -r '.wiki_page|.text'
 }
 
+cat_page(){
+    get_text "$1" |filter_page
+}
+
+less_page(){
+    get_text "$1" |filter_page > .wikiwhack.$$.tmp
+    less -R .wikiwhack.$$.tmp
+    rm .wikiwhack.$$.tmp
+}
+
 edit_page(){
     get_text "$1" > .wikiwhack.$$.tmp
     $EDITOR .wikiwhack.$$.tmp < /dev/tty
-    jq --slurp -R '{"wiki_page": { "text": . }}' < .wikiwhack.$$.tmp | put foo
+    jq --slurp -R '{"wiki_page": { "text": . }}' < .wikiwhack.$$.tmp | put "$1"
     rm .wikiwhack.$$.tmp
 }
 
@@ -62,6 +93,9 @@ case $1 in
     edit ) 
         edit_page "$2"
         ;;
+    less ) 
+        less_page "$2"
+        ;;
     search )
         search "$2"
         ;;
@@ -69,16 +103,22 @@ case $1 in
         get_titles
         ;;
     cat )
-        get_text "$2"
+        cat_page "$2"
         ;;
     "")
         get_titles | fzf \
             --preview="$0 cat {}" \
-            --layout reverse \
-            --bind "enter:toggle-preview" \
-            --bind "ctrl-s:reload#$0 search {q}#+clear-query" \
-            --bind "ctrl-e:execute:$0 edit {}" \
-            --preview-window hidden \
-            --header 'CTRL-E:edit CTRL-S:search CTRL-Q:quit ENTER:preview'
+            --layout=reverse \
+            --bind="enter:toggle-preview" \
+            --bind="ctrl-s:reload#$0 search {q}#+clear-query" \
+            --bind="ctrl-e:execute:$0 edit {}" \
+            --bind="ctrl-l:execute:$0 less {}" \
+            --bind="ctrl-j:preview-half-page-down" \
+            --bind="ctrl-k:preview-half-page-up" \
+            --color="header:bold" \
+            --info=inline \
+            --ansi \
+            --preview-window=hidden \
+            --header='C-e:edit C-s:search C-l:less ENTER:preview C-q:quit'
         ;;
 esac
