@@ -30,9 +30,9 @@ filter_page(){
             escape = ""
             bold   = escape "[1m"
             normal = escape "[0m"
+            quote  = sprintf("%c", 39);
             current = 0
             output_index = 0
-            for(n=0;n<256;n++)ord[sprintf("%c",n)]=n
         }
 
         function add_output (text, preformatted ) {
@@ -41,11 +41,15 @@ filter_page(){
             output[output_index++] = text
         }
 
-        # function decode_entity ( text ) {
-        #    while ( match(text, /&#[0-9]/) != -1 ) {
-        #        substr(text, 0, RL
-        #    }
-        # }
+        function decode_entities ( text ) {
+           while ( match(text, /&#[0-9]+;/) != 0 ) {
+               text = substr(text, 0, RSTART - 1) \
+                      sprintf("%c", 0+substr(text, RSTART + 2, RLENGTH - 3 )) \
+                      substr(text, RSTART + RLENGTH)
+           }
+           gsub(/&quot;/, quote, text)
+           return text
+        }
 
         function print_block () {
             if ( current == 0 && lines[current] == "" ) return
@@ -57,6 +61,10 @@ filter_page(){
             }
             current = 0
             add_output("")
+        }
+
+        {
+            $0 = decode_entities($0)
         }
 
         /^h[0-9]\([^)]+\)\./{
