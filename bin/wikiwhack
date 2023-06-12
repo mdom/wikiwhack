@@ -25,20 +25,79 @@ _search(){
 }
 
 filter_page(){
-    awk '
+    awk -v width=${FZF_PREVIEW_COLUMNS:-70} '
         BEGIN {
             escape = ""
             bold   = escape "[1m"
             normal = escape "[0m"
+            current = 0
+            output_index = 0
+            for(n=0;n<256;n++)ord[sprintf("%c",n)]=n
         }
+
+        function add_output (text, preformatted ) {
+            if ( !preformatted && text output[output_index-1] == "")
+                return
+            output[output_index++] = text
+        }
+
+        # function decode_entity ( text ) {
+        #    while ( match(text, /&#[0-9]/) != -1 ) {
+        #        substr(text, 0, RL
+        #    }
+        # }
+
+        function print_block () {
+            if ( current == 0 && lines[current] == "" ) return
+            add_output("")
+            for ( i = 0; i <= current; i++ ) {
+                if ( !lines[i] ) continue
+                add_output(lines[i])
+                delete lines[i]
+            }
+            current = 0
+            add_output("")
+        }
+
         /^h[0-9]\([^)]+\)\./{
             sub(/\([^)]+\)/, "")
         }
         /^h[0-9]./{
-            print bold $0 normal
+            print_block()
+            add_output(bold $0 normal)
             next
         }
-        {print}
+        /<pre>/,/<\/pre>/ {
+            print_block()
+            add_output($0, 1)
+            next
+        }
+        /^$/ {
+            print_block()
+            next
+        }
+        {
+            for(i=1; i<=NF; i++) {
+                if ( length($i) + length(lines[current]) > width && lines[current] != "") current++
+                joiner = lines[current] ? " " : ""
+                lines[current] = lines[current] joiner $i
+            }
+        }
+        END {
+            print_block()
+            for ( i = 0; i <= output_index; i++ )
+                if (output[i] != "") {
+                    first_line = i
+                    break
+                }
+            for ( i = output_index; i >= 0; i-- )
+                if (output[i] != "") {
+                    last_line = i
+                    break
+                }
+            for ( i = first_line; i <= last_line; i++ )
+                print output[i]
+        }
     '
 }
 
@@ -110,6 +169,9 @@ case $1 in
         ;;
     cat )
         cat_page "$2"
+        ;;
+    filter ) 
+        filter_page
         ;;
     "")
         get_titles | fzf \
