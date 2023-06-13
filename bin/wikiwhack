@@ -8,7 +8,7 @@ if [ -e "$HOME/.wikiwhackrc" ]; then
 fi
 
 if [ -z "$base_url" ]; then
-    printf "Config parameter base_url is not set." >&2
+    printf "Parameter base_url is not set in config file.\n" >&2
     exit 1
 fi
 
