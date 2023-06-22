@@ -42,8 +42,10 @@ function edit_page (page) {
     }
 }
 
-function tmpfile() {
-    return sprintf("/tmp/wikiwhack.%s", rand())
+function tmpfile(,file) {
+    file = sprintf("/tmp/wikiwhack.%s", rand())
+    TEMPFILES[TEMPFILESC++] = file
+    return file
 }
 
 function get_text (page) {
@@ -96,5 +98,7 @@ BEGIN {
         page = ARGV[2]
         edit_page(page)
     }
-    system("rm -f /tmp/wikiwhack.0.*")
+
+    for (idx in TEMPFILES)
+        system("rm " TEMPFILES[idx])
 }
