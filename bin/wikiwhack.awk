@@ -1,5 +1,90 @@
 #!/usr/bin/awk -f
 
+function add_output (text, preformatted ) {
+    if ( !preformatted && text output[output_index-1] == "")
+        return
+    output[output_index++] = text
+}
+
+function decode_entities ( text ) {
+   while ( match(text, /&#[0-9]+;/) != 0 ) {
+       text = substr(text, 0, RSTART - 1) \
+              sprintf("%c", 0+substr(text, RSTART + 2, RLENGTH - 3 )) \
+              substr(text, RSTART + RLENGTH)
+   }
+   gsub(/&quot;/, quote, text)
+   return text
+}
+
+function print_block () {
+    if ( current == 0 && lines[current] == "" ) return
+    add_output("")
+    for ( i = 0; i <= current; i++ ) {
+        if ( !lines[i] ) continue
+        add_output(lines[i])
+        delete lines[i]
+    }
+    current = 0
+    add_output("")
+}
+
+function render_text ( text ) {
+        text = decode_entities(text)
+        pre_mode = 0
+
+        n = split(text, lines, /\n/)
+
+        for (i=1; i<n; i++ ) {
+            line = lines[i]
+
+            if ( match(line, /^h[0-9]\([^)]+\)\./ )) {
+                sub(/\([^)]+\)/, "")
+            }
+
+            if ( match( line, /^h[0-9]./ )){
+                print_block()
+                add_output(bold $0 normal)
+            }
+
+            if ( match( line, /<pre>/)) {
+                pre_mode = 1
+                print_block()
+                add_output($0, 1)
+            }
+
+            if ( match( line, /<\/pre>/)) {
+                pre_mode = 0
+            }
+
+            if ( match( line, /^$/)) {
+                print_block()
+                continue
+            }
+
+            nf = split(lines, fields)
+
+            for(j=1; j<=nf; j++) {
+                if ( length(fields[j]) + length(lines[current]) > width && lines[current] != "") current++
+                joiner = lines[current] ? " " : ""
+                lines[current] = lines[current] joiner fields[j]
+            }
+        }
+        print_block()
+        for ( i = 0; i <= output_index; i++ )
+            if (output[i] != "") {
+                first_line = i
+                break
+            }
+        for ( i = output_index; i >= 0; i-- )
+            if (output[i] != "") {
+                last_line = i
+                break
+            }
+        for ( i = first_line; i <= last_line; i++ )
+            result = result RS output[i]
+        return result
+}
+
 function get( page, filter,  text ) {
     gsub(/'/,"%27", page)
     cmd = curl "'" base_url "/wiki/" page ".json?key=" ENVIRON["REDMINE_APIKEY"] "'"
@@ -72,6 +157,16 @@ BEGIN {
 
     editor = ENVIRON["EDITOR"]
     if (!editor) editor = "vi"
+
+    width = ENVIRON["FZF_PREVIEW_COLUMNS"]
+    if ( !width ) widht = 70
+
+    escape = ""
+    bold   = escape "[1m"
+    normal = escape "[0m"
+    quote  = sprintf("%c", 39);
+    current = 0
+    output_index = 0
 
     srand()
 
