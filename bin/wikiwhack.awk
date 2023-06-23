@@ -1,11 +1,5 @@
 #!/usr/bin/awk -f
 
-function add_output (text, preformatted ) {
-    if ( !preformatted && text output[output_index-1] == "")
-        return
-    output[output_index++] = text
-}
-
 function decode_entities ( text ) {
    while ( match(text, /&#[0-9]+;/) != 0 ) {
        text = substr(text, 0, RSTART - 1) \
@@ -16,73 +10,77 @@ function decode_entities ( text ) {
    return text
 }
 
-function print_block () {
-    if ( current == 0 && lines[current] == "" ) return
-    add_output("")
-    for ( i = 0; i <= current; i++ ) {
-        if ( !lines[i] ) continue
-        add_output(lines[i])
-        delete lines[i]
-    }
-    current = 0
-    add_output("")
-}
-
 function render_text ( text ) {
+        gsub(/ä/,"ae", text)
+        gsub(/ö/,"oe", text)
+        gsub(/ü/,"ue", text)
         text = decode_entities(text)
         pre_mode = 0
+        column = 0
+        output = ""
 
-        n = split(text, lines, /\n/)
+        nr = split(text, lines, /\n/)
 
-        for (i=1; i<n; i++ ) {
+        for (i=1; i<nr; i++ ) {
             line = lines[i]
 
             if ( match(line, /^h[0-9]\([^)]+\)\./ )) {
-                sub(/\([^)]+\)/, "")
+                sub(/\([^)]+\)/, "", line)
             }
 
-            if ( match( line, /^h[0-9]./ )){
-                print_block()
-                add_output(bold $0 normal)
-            }
-
-            if ( match( line, /<pre>/)) {
-                pre_mode = 1
-                print_block()
-                add_output($0, 1)
-            }
-
-            if ( match( line, /<\/pre>/)) {
-                pre_mode = 0
-            }
-
-            if ( match( line, /^$/)) {
-                print_block()
+            if ( match( line, /^h[0-9]./ )) {
+                output = output bold line normal RS RS
+                between_blocks = 1
+                column = 0
                 continue
             }
 
-            nf = split(lines, fields)
+            if ( match( line, /<pre>/))
+                pre_mode = 1
+
+            if ( match( line, /<\/pre>/)) {
+                pre_mode = 0
+                output = output RS
+                between_blocks = 1
+                column = 0
+            }
+
+            if ( pre_mode ) {
+                output = output line RS
+                continue
+            }
+
+            if ( match( line, /^$/)) {
+                if ( !between_blocks ) {
+                    output = output RS RS
+                    between_blocks = 1
+                    column = 0
+                }
+                continue
+            }
+            else {
+                between_blocks = 0
+            }
+
+            nf = split(line, fields)
 
             for(j=1; j<=nf; j++) {
-                if ( length(fields[j]) + length(lines[current]) > width && lines[current] != "") current++
-                joiner = lines[current] ? " " : ""
-                lines[current] = lines[current] joiner fields[j]
+                word = fields[j]
+                len = length(word)
+                if ( len + column + 1 > width ) {
+                    output = output RS
+                    column = 0
+                }
+                if (column == 0) {
+                    output = output word
+                    column += len
+                } else {
+                    output = output " " word
+                    column += len + 1
+                }
             }
         }
-        print_block()
-        for ( i = 0; i <= output_index; i++ )
-            if (output[i] != "") {
-                first_line = i
-                break
-            }
-        for ( i = output_index; i >= 0; i-- )
-            if (output[i] != "") {
-                last_line = i
-                break
-            }
-        for ( i = first_line; i <= last_line; i++ )
-            result = result RS output[i]
-        return result
+        return output RS
 }
 
 function get( page, filter,  text ) {
@@ -159,7 +157,8 @@ BEGIN {
     if (!editor) editor = "vi"
 
     width = ENVIRON["FZF_PREVIEW_COLUMNS"]
-    if ( !width ) widht = 70
+    if ( !width ) width = 70
+    width -= 10
 
     escape = ""
     bold   = escape "[1m"
@@ -170,7 +169,7 @@ BEGIN {
 
     srand()
 
-    gsub(/\$0/,"wikiwhack",fzf)
+    gsub(/\$0/,"wikiwhack.awk",fzf)
 
     mode = ARGV[1]
 
@@ -186,7 +185,7 @@ BEGIN {
     }
     else if ( mode == "cat" ) {
         page = ARGV[2]
-        text = get_text(page)
+        text = render_text(get_text(page))
         if (text) printf "%s", text
     }
     else if ( mode == "edit" ) {
