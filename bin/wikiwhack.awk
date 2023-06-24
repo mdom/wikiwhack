@@ -10,6 +10,20 @@ function decode_entities ( text ) {
    return text
 }
 
+function add_vspace (){
+    if ( !skip_newlines ) {
+        skip_newlines = 1
+        column = 0
+        return RS RS
+    }
+}
+
+function force_vspace() {
+    skip_newlines = 1
+    column = 0
+    return RS RS
+}
+
 function render_text ( text ) {
         gsub(/ä/,"ae", text)
         gsub(/ö/,"oe", text)
@@ -18,6 +32,7 @@ function render_text ( text ) {
         pre_mode = 0
         column = 0
         output = ""
+        skip_newlines = 1
 
         nr = split(text, lines, /\n/)
 
@@ -29,9 +44,7 @@ function render_text ( text ) {
             }
 
             if ( match( line, /^h[0-9]./ )) {
-                output = output bold line normal RS RS
-                between_blocks = 1
-                column = 0
+                output = output add_vspace() bold line normal force_vspace()
                 continue
             }
 
@@ -40,9 +53,10 @@ function render_text ( text ) {
 
             if ( match( line, /<\/pre>/)) {
                 pre_mode = 0
-                output = output RS
-                between_blocks = 1
+                output = output line RS RS
+                skip_newlines = 1
                 column = 0
+                continue
             }
 
             if ( pre_mode ) {
@@ -51,15 +65,15 @@ function render_text ( text ) {
             }
 
             if ( match( line, /^$/)) {
-                if ( !between_blocks ) {
+                if ( !skip_newlines ) {
                     output = output RS RS
-                    between_blocks = 1
+                    skip_newlines = 1
                     column = 0
                 }
                 continue
             }
             else {
-                between_blocks = 0
+                skip_newlines = 0
             }
 
             nf = split(line, fields)
@@ -123,6 +137,8 @@ function edit_page (page) {
     if (system("cmp -s " tmp " " tmp_) == 1) {
         upload_page(page, tmp)
     }
+    close(tmp)
+    close(tmp_)
 }
 
 function tmpfile(,file) {
@@ -135,7 +151,39 @@ function get_text (page) {
     return get(page, "jq -r '.wiki_page|.text'")
 }
 
+function read_config (,  file) {
+    if ( ENVIRON["XDG_CONFIG_HOME"] ) 
+        file = ENVIRON["XDG_CONFIG_HOME"] "/wikiwhack/wikiwackrc"
+    else
+        file = ENVIRON["HOME"] "/.wikiwhackrc"
+    while ( getline < file > 0 ) {
+        config[$1] = $2
+    }
+    close(file)
+}
+
+function die (msg) {
+    print prog ": " msg > "/dev/stderr"
+    exit 1
+}
+
+function basename (file,  parts) {
+    n = split(file, parts, "/")
+    return parts[n]
+}
+
 BEGIN {
+    prog = ENVIRON["_"]
+    if ( !prog ) prog = "wikiwack"
+
+    read_config()
+
+    if ( !config["base_url"] ) {
+        die("Configuration setting base_url not set.")
+    }
+
+    base_url = config["base_url"]
+
     curl = "exec curl -sS -H 'Content-Type: application/json' "
     fzf  = "exec fzf " \
         "--preview='$0 cat {}' " \
@@ -153,6 +201,8 @@ BEGIN {
         "--preview-window=hidden " \
         "--header='M-e:edit M-s:search M-v:less ENTER:preview M-q:quit' "
 
+    gsub(/\$0/, prog, fzf)
+
     editor = ENVIRON["EDITOR"]
     if (!editor) editor = "vi"
 
@@ -168,8 +218,6 @@ BEGIN {
     output_index = 0
 
     srand()
-
-    gsub(/\$0/,"wikiwhack.awk",fzf)
 
     mode = ARGV[1]
 
@@ -187,6 +235,13 @@ BEGIN {
         page = ARGV[2]
         text = render_text(get_text(page))
         if (text) printf "%s", text
+    }
+    else if ( mode == "view" ) {
+        page = ARGV[2]
+        text = render_text(get_text(page))
+        cmd = "less -R"
+        if (text) printf "%s", text  | cmd
+        close(cmd)
     }
     else if ( mode == "edit" ) {
         page = ARGV[2]
