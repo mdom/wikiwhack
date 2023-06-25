@@ -10,31 +10,15 @@ function decode_entities ( text ) {
    return text
 }
 
-function add_vspace (){
-    if ( !skip_newlines ) {
-        skip_newlines = 1
-        column = 0
-        return RS RS
-    }
-}
+function render_text (text,  nr,ol,lines,line,nf,pre_mode,output,result ) {
 
-function force_vspace() {
-    skip_newlines = 1
-    column = 0
-    return RS RS
-}
+        gsub(/\015/, "\012", text)
 
-function render_text ( text ) {
-        gsub(/ä/,"ae", text)
-        gsub(/ö/,"oe", text)
-        gsub(/ü/,"ue", text)
         text = decode_entities(text)
         pre_mode = 0
-        column = 0
-        output = ""
-        skip_newlines = 1
 
         nr = split(text, lines, /\n/)
+        ol = 1
 
         for (i=1; i<nr; i++ ) {
             line = lines[i]
@@ -44,36 +28,28 @@ function render_text ( text ) {
             }
 
             if ( match( line, /^h[0-9]./ )) {
-                output = output add_vspace() bold line normal force_vspace()
+                output[++ol] =  ""
+                output[++ol] =  bold line normal
+                output[++ol] =  ""
                 continue
             }
 
             if ( match( line, /<pre>/))
                 pre_mode = 1
 
+            if ( pre_mode ) {
+                output[++ol] = line
+                continue
+            }
+
             if ( match( line, /<\/pre>/)) {
                 pre_mode = 0
-                output = output line RS RS
-                skip_newlines = 1
-                column = 0
                 continue
             }
 
-            if ( pre_mode ) {
-                output = output line RS
+            if ( match( line, /^[ \t]*$/)) {
+                output[++ol] = ""
                 continue
-            }
-
-            if ( match( line, /^$/)) {
-                if ( !skip_newlines ) {
-                    output = output RS RS
-                    skip_newlines = 1
-                    column = 0
-                }
-                continue
-            }
-            else {
-                skip_newlines = 0
             }
 
             nf = split(line, fields)
@@ -81,23 +57,33 @@ function render_text ( text ) {
             for(j=1; j<=nf; j++) {
                 word = fields[j]
                 len = length(word)
-                if ( len + column + 1 > width ) {
-                    output = output RS
-                    column = 0
+                if ( len + length(output[ol]) + 1 > width ) {
+                    ol++
                 }
-                if (column == 0) {
-                    output = output word
-                    column += len
-                } else {
-                    output = output " " word
-                    column += len + 1
-                }
+                if (output[ol] == "")
+                    output[ol] = word
+                else 
+                    output[ol] = output[ol] " " word
             }
         }
-        return output RS
+
+        ## Remove empty lines from end
+        while (output[ol] == "") ol--
+
+        last   = ""
+        for (i=1;i<=ol;i++) {
+            if ( !(last == "" && output[i] == "" )) {
+                if (result)
+                    result = result RS output[i]
+                else
+                    result = result output[i]
+                last = output[i]
+            }
+        }
+        return result RS
 }
 
-function get( page, filter,  text ) {
+function get( page, filter,  text, cmd ) {
     gsub(/'/,"%27", page)
     cmd = curl "'" base_url "/wiki/" page ".json?key=" ENVIRON["REDMINE_APIKEY"] "'"
     if ( filter ) cmd = cmd "|" filter
@@ -109,7 +95,7 @@ function get( page, filter,  text ) {
     return text
 }
 
-function upload_page( page, file ) {
+function upload_page( page, file,  json, url, cmd ) {
     cmd = "jq --slurp -R '{\"wiki_page\": { \"text\": . }}' " file 
     while ( cmd | getline line > 0 ) {
         json = json RS line    
@@ -122,12 +108,12 @@ function upload_page( page, file ) {
     close(cmd)
 }
 
-function get_titles (titles) {
+function get_titles (titles,  text) {
     text = get("index", "jq -r '.wiki_pages|.[]|.title'")
     return split(text, titles, /\n/)
 }
 
-function edit_page (page) {
+function edit_page (page,  tmp, tmp_) {
     text = get_text(page)
     tmp = tmpfile()
     tmp_ = tmpfile()
