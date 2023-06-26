@@ -143,7 +143,7 @@ function edit_page (page,  tmp, tmp_) {
     tmp_ = tmpfile()
     print text > tmp
     print text > tmp_
-    system(editor " " tmp ")
+    system(editor " " tmp)
     if (system("cmp -s " tmp " " tmp_) == 1) {
         upload_page(page, tmp)
     }
@@ -197,6 +197,7 @@ BEGIN {
 
     base_url = config["base_url"]
 
+    header = "M-e:edit M-s:search M-v:less ENTER:preview M-q:quit"
     curl = "exec curl -sS -H 'Content-Type: application/json' "
     fzf  = "exec fzf " \
         "--preview='$0 cat {}' " \
@@ -213,7 +214,7 @@ BEGIN {
         "--info=inline "  \
         "--ansi " \
         "--preview-window=hidden " \
-        "--header='M-e:edit M-s:search M-v:less ENTER:preview M-q:quit' "
+        "--header='"header"'"
 
     gsub(/\$0/, prog, fzf)
 
@@ -255,7 +256,6 @@ BEGIN {
         if (text) {
             tmp = tmpfile()
             cmd = "LESSEDIT='"prog" edit "page"' less -R " tmp
-            print cmd
             printf "%s", text  > tmp
             close(tmp)
             system(cmd)
