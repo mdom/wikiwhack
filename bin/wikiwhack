@@ -23,43 +23,43 @@ function utf8len (text) {
     return length(text)
 }
 
-function render_text (text,  nr,ol,lines,line,nf,pre_mode,output,result,prefix ) {
+function render_text (text,  nr,ol,lines,line,nf,output,result,prefix ) {
 
+        gsub(/\015\012/, "\012", text)
         gsub(/\015/, "\012", text)
 
         text = decode_entities(text)
-        pre_mode = 0
 
         nr = split(text, lines, "\n")
         ol = 1
 
-        for (i=1; i<nr; i++ ) {
+        for (i=1; i<=nr; i++ ) {
             line = lines[i]
 
             if ( match(line, /^h[0-9]\([^)]+\)\./ )) {
                 sub(/\([^)]+\)/, "", line)
             }
 
-            if ( match( line, /^h[0-9]./ )) {
+            if ( match(line, /^h[0-9]\./ )) {
                 output[++ol] =  ""
                 output[++ol] =  bold line normal
                 output[++ol] =  ""
-                prefix = ""
                 continue
             }
 
-            if ( match( line, /<pre>/))
-                pre_mode = 1 
-                prefix = ""
-
-            if ( pre_mode ) output[++ol] = line
-
-            if ( match( line, /<\/pre>/)) {
-                pre_mode = 0
+            ## TODO render table
+            if ( match( line, /^[ ]*\|/)) {
+                output[++ol] = line
                 continue
             }
 
-            if ( pre_mode ) continue
+            if ( match( line, /<pre>/)) {
+                do {
+                    output[++ol]=lines[i] 
+                } while (!match(lines[++i], /<\/pre>/) && i <= nr)
+                output[++ol] = lines[i]
+                continue
+            }
 
             if ( match( line, /^[ \t]*$/)) {
                 output[++ol] = ""
@@ -71,6 +71,7 @@ function render_text (text,  nr,ol,lines,line,nf,pre_mode,output,result,prefix )
                 prefix = substr(line, 0, RLENGTH)
                 line = substr(line, RLENGTH )
             }
+            output[++ol] = ""
 
             nf = split(line, fields)
 
