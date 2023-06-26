@@ -1,201 +1,266 @@
-#!/bin/sh
+#!/usr/bin/awk -f
 
-base_url=""
+function decode_entities ( text ) {
+   while ( match(text, /&#[0-9]+;/) != 0 ) {
+       text = substr(text, 0, RSTART - 1) \
+              sprintf("%c", 0+substr(text, RSTART + 2, RLENGTH - 3 )) \
+              substr(text, RSTART + RLENGTH)
+   }
+   gsub(/&quot;/, quote, text)
+   return text
+}
 
-if [ -e "$HOME/.wikiwhackrc" ]; then
-    # shellcheck disable=SC1091
-    . "$HOME/.wikiwhackrc"
-fi
+function utf8len (text) {
+    if ( unicode_aware ) return length(text)
+    ## This needs to be a string otherwise gawk fails
+    gsub("[\200-\301\365-\377]+","", text)
+    return length(text)
+}
 
-if [ -z "$base_url" ]; then
-    printf "Parameter base_url is not set in config file.\n" >&2
+function render_text (text,  nr,ol,lines,line,nf,pre_mode,output,result,prefix ) {
+
+        gsub(/\015/, "\012", text)
+
+        text = decode_entities(text)
+        pre_mode = 0
+
+        nr = split(text, lines, "\n")
+        ol = 1
+
+        for (i=1; i<nr; i++ ) {
+            line = lines[i]
+
+            if ( match(line, /^h[0-9]\([^)]+\)\./ )) {
+                sub(/\([^)]+\)/, "", line)
+            }
+
+            if ( match( line, /^h[0-9]./ )) {
+                output[++ol] =  ""
+                output[++ol] =  bold line normal
+                output[++ol] =  ""
+                prefix = ""
+                continue
+            }
+
+            if ( match( line, /<pre>/))
+                pre_mode = 1 
+                prefix = ""
+
+            if ( pre_mode ) output[++ol] = line
+
+            if ( match( line, /<\/pre>/)) {
+                pre_mode = 0
+                continue
+            }
+
+            if ( pre_mode ) continue
+
+            if ( match( line, /^[ \t]*$/)) {
+                output[++ol] = ""
+                prefix = ""
+                continue
+            }
+
+            if ( match( line, /^\*+[ ]+/)) {
+                prefix = substr(line, 0, RLENGTH)
+                line = substr(line, RLENGTH )
+            }
+
+            nf = split(line, fields)
+
+            for(j=1; j<=nf; j++) {
+                word = fields[j]
+                len = length(word)
+                if ( len + length(output[ol]) + 1 + length(prefix) > width ) {
+                    ol++
+                }
+                if (output[ol] == "") {
+                    output[ol] = prefix word
+                    prefix = sprintf("%*s", length(prefix), "")
+                }
+                else {
+                    output[ol] = output[ol] " " word
+                }
+            }
+        }
+
+        ## Remove empty lines from end
+        while (output[ol] == "") ol--
+
+        last   = ""
+        for (i=1;i<=ol;i++) {
+            if ( !(last == "" && output[i] == "" )) {
+                if (result)
+                    result = result RS output[i]
+                else
+                    result = result output[i]
+                last = output[i]
+            }
+        }
+        return result RS
+}
+
+function get( page, filter,  text, cmd ) {
+    gsub(/'/,"%27", page)
+    cmd = curl "'" base_url "/wiki/" page ".json?key=" ENVIRON["REDMINE_APIKEY"] "'"
+    if ( filter ) cmd = cmd "|" filter
+    while ( cmd | getline line > 0 ) {
+        if (text) text = text RS line
+        else text = line
+    }
+    close(cmd)
+    return text
+}
+
+function upload_page( page, file,  json, url, cmd ) {
+    cmd = "jq --slurp -R '{\"wiki_page\": { \"text\": . }}' " file 
+    while ( cmd | getline line > 0 ) {
+        json = json RS line    
+    }
+    close(cmd)
+
+    url = "'" base_url "/wiki/" page ".json?key=" ENVIRON["REDMINE_APIKEY"] "'"
+    cmd = curl " -o /dev/null --request PUT --data-binary @- " url
+    print json | cmd
+    close(cmd)
+}
+
+function get_titles (titles,  text) {
+    text = get("index", "jq -r '.wiki_pages|.[]|.title'")
+    return split(text, titles, /\n/)
+}
+
+function edit_page (page,  tmp, tmp_) {
+    text = get_text(page)
+    tmp = tmpfile()
+    tmp_ = tmpfile()
+    print text > tmp
+    print text > tmp_
+    system(editor " " tmp " </dev/tty")
+    if (system("cmp -s " tmp " " tmp_) == 1) {
+        upload_page(page, tmp)
+    }
+    close(tmp)
+    close(tmp_)
+}
+
+function tmpfile(  file) {
+    file = sprintf("/tmp/wikiwhack.%s", rand())
+    TEMPFILES[TEMPFILESC++] = file
+    return file
+}
+
+function get_text (page) {
+    return get(page, "jq -r '.wiki_page|.text'")
+}
+
+function read_config (  file) {
+    if ( ENVIRON["XDG_CONFIG_HOME"] ) 
+        file = ENVIRON["XDG_CONFIG_HOME"] "/wikiwhack/wikiwackrc"
+    else
+        file = ENVIRON["HOME"] "/.wikiwhackrc"
+    while ( getline < file > 0 ) {
+        config[$1] = $2
+    }
+    close(file)
+}
+
+function die (msg) {
+    print prog ": " msg > "/dev/stderr"
     exit 1
-fi
-
-get(){
-    curl -sS -H "Content-Type: application/json" "$base_url/wiki/$1.json?key=$REDMINE_APIKEY"
 }
 
-put(){
-    curl -sS --request PUT --data-binary @- -H "Content-Type: application/json" "$base_url/wiki/$1.json?key=$REDMINE_APIKEY"
+function basename (file,  parts) {
+    n = split(file, parts, "/")
+    return parts[n]
 }
 
-_search(){
-    curl -sS --get -H "Content-Type: application/json" "$base_url/search.json?key=$REDMINE_APIKEY" -d "q=$1" -d "offset=$2" -d "limit=$3"
+BEGIN {
+    prog = ENVIRON["_"]
+    if ( !prog ) prog = "wikiwack"
+
+    unicode_aware = 0
+    if (length("Köln") == 4 ) unicode_aware = 1
+
+    read_config()
+
+    if ( !config["base_url"] ) {
+        die("Configuration setting base_url not set.")
+    }
+
+    base_url = config["base_url"]
+
+    curl = "exec curl -sS -H 'Content-Type: application/json' "
+    fzf  = "exec fzf " \
+        "--preview='$0 cat {}' " \
+        "--bind=enter:toggle-preview " \
+        "--bind='alt-s:reload#$0 search {q}#+clear-query' " \
+        "--bind='alt-c:execute#$0 edit {q}#+reload:$0 titles' " \
+        "--bind='alt-e:execute:$0 edit {}' " \
+        "--bind='alt-v:execute:$0 view {}' " \
+        "--bind='alt-y:execute:$0 yank {}' " \
+        "--bind=alt-j:preview-half-page-down " \
+        "--bind=alt-k:preview-half-page-up " \
+        "--bind=alt-q:abort " \
+        "--color=header:reverse " \
+        "--info=inline "  \
+        "--ansi " \
+        "--preview-window=hidden " \
+        "--header='M-e:edit M-s:search M-v:less ENTER:preview M-q:quit' "
+
+    gsub(/\$0/, prog, fzf)
+
+    editor = ENVIRON["EDITOR"]
+    if (!editor) editor = "vi"
+
+    width = ENVIRON["FZF_PREVIEW_COLUMNS"]
+    if ( !width ) width = 70
+
+    escape = ""
+    bold   = escape "[1m"
+    normal = escape "[0m"
+    quote  = sprintf("%c", 39);
+    current = 0
+    output_index = 0
+
+    srand()
+
+    mode = ARGV[1]
+
+    if ( mode == "" ) {
+        n = get_titles(titles)
+        for (i=1; i<=n; i++)
+            print titles[i] | fzf
+    }
+    else if ( mode == "titles" ) {
+        n = get_titles(titles)
+        for (i=1; i<=n; i++)
+            print titles[i]
+    }
+    else if ( mode == "cat" ) {
+        page = ARGV[2]
+        text = render_text(get_text(page))
+        if (text) printf "%s", text
+    }
+    else if ( mode == "view" ) {
+        page = ARGV[2]
+        text = render_text(get_text(page))
+        cmd = "less -R"
+        if (text) printf "%s", text  | cmd
+        close(cmd)
+    }
+    else if ( mode == "edit" ) {
+        page = ARGV[2]
+        edit_page(page)
+    }
+    else if ( mode == "yank" ) {
+        gsub(/'/,"%27", ARGV[2])
+        url =  base_url "/wiki/" ARGV[2]
+        cmd = "xclip -i"
+        print url | cmd
+        close(cmd)
+    }
+
+    for (idx in TEMPFILES)
+        system("rm " TEMPFILES[idx])
 }
-
-filter_page(){
-    awk -v width=${FZF_PREVIEW_COLUMNS:-70} '
-        BEGIN {
-            escape = ""
-            bold   = escape "[1m"
-            normal = escape "[0m"
-            quote  = sprintf("%c", 39);
-            current = 0
-            output_index = 0
-        }
-
-        function add_output (text, preformatted ) {
-            if ( !preformatted && text output[output_index-1] == "")
-                return
-            output[output_index++] = text
-        }
-
-        function decode_entities ( text ) {
-           while ( match(text, /&#[0-9]+;/) != 0 ) {
-               text = substr(text, 0, RSTART - 1) \
-                      sprintf("%c", 0+substr(text, RSTART + 2, RLENGTH - 3 )) \
-                      substr(text, RSTART + RLENGTH)
-           }
-           gsub(/&quot;/, quote, text)
-           return text
-        }
-
-        function print_block () {
-            if ( current == 0 && lines[current] == "" ) return
-            add_output("")
-            for ( i = 0; i <= current; i++ ) {
-                if ( !lines[i] ) continue
-                add_output(lines[i])
-                delete lines[i]
-            }
-            current = 0
-            add_output("")
-        }
-
-        {
-            $0 = decode_entities($0)
-        }
-
-        /^h[0-9]\([^)]+\)\./{
-            sub(/\([^)]+\)/, "")
-        }
-        /^h[0-9]./{
-            print_block()
-            add_output(bold $0 normal)
-            next
-        }
-        /<pre>/,/<\/pre>/ {
-            print_block()
-            add_output($0, 1)
-            next
-        }
-        /^$/ {
-            print_block()
-            next
-        }
-        {
-            for(i=1; i<=NF; i++) {
-                if ( length($i) + length(lines[current]) > width && lines[current] != "") current++
-                joiner = lines[current] ? " " : ""
-                lines[current] = lines[current] joiner $i
-            }
-        }
-        END {
-            print_block()
-            for ( i = 0; i <= output_index; i++ )
-                if (output[i] != "") {
-                    first_line = i
-                    break
-                }
-            for ( i = output_index; i >= 0; i-- )
-                if (output[i] != "") {
-                    last_line = i
-                    break
-                }
-            for ( i = first_line; i <= last_line; i++ )
-                print output[i]
-        }
-    '
-}
-
-get_titles(){
-    get 'index' | jq -r '.wiki_pages|.[]|.title'
-}
-
-get_text(){
-    get "$1" | jq -r '.wiki_page|.text'
-}
-
-cat_page(){
-    get_text "$1" |filter_page
-}
-
-view_page(){
-    _tmp=$HOME/.wikiwhack.$$.less.tmp
-    get_text "$1" |filter_page > "$_tmp"
-    LESSEDIT="$0 edit '$1'" less -R "$_tmp"
-    rm "$_tmp"
-}
-
-edit_page(){
-    _tmp=$HOME/.wikiwhack.$$.edit.tmp
-    get_text "$1" > "$_tmp"
-    cp "$_tmp" "$_tmp~"
-    $EDITOR "$_tmp" < /dev/tty
-
-    if ! diff -q "$_tmp" "$_tmp~" > /dev/null ; then
-        jq --slurp -R '{"wiki_page": { "text": . }}' < "$_tmp" | put "$1"
-    fi
-
-    rm -f "$_tmp" "$_tmp~"
-}
-
-search(){
-    _tmp=$HOME/.wikiwhack.$$.search.tmp
-    if [ -z "$1" ]; then
-        get_titles
-    fi
-    total_count=$( _search "$1" 0 1 | jq '(.total_count//0)')
-
-    if [ "$total_count" -eq 0 ]; then
-        return
-    fi
-
-    offset=0
-    while [ "$offset" -lt "$total_count" ]; do
-        _search "$1" $offset 100 | jq -r '.results|.[]|.title'|sed 's/^Wiki: //' >> "$_tmp"
-        offset=$(( offset + 100 ))
-    done
-
-    cat "$_tmp"
-    rm "$_tmp"
-}
-
-case $1 in
-    edit ) 
-        edit_page "$2"
-        ;;
-    view ) 
-        view_page "$2"
-        ;;
-    search )
-        search "$2"
-        ;;
-    titles )
-        get_titles
-        ;;
-    cat )
-        cat_page "$2"
-        ;;
-    filter ) 
-        filter_page
-        ;;
-    "")
-        get_titles | fzf \
-            --preview="$0 cat {}" \
-            --bind="enter:toggle-preview" \
-            --bind="alt-s:reload#$0 search {q}#+clear-query" \
-            --bind="alt-c:execute#$0 edit {q}#+reload:$0 titles" \
-            --bind="alt-e:execute:$0 edit {}" \
-            --bind="alt-v:execute:$0 view {}" \
-            --bind="alt-j:preview-half-page-down" \
-            --bind="alt-k:preview-half-page-up" \
-            --bind="alt-q:abort" \
-            --color="header:reverse" \
-            --info=inline \
-            --ansi \
-            --preview-window=hidden \
-            --header='M-e:edit M-s:search M-v:less ENTER:preview M-q:quit'
-        ;;
-esac
