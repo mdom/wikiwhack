@@ -12,8 +12,14 @@ function decode_entities ( text ) {
 
 function utf8len (text) {
     if ( unicode_aware ) return length(text)
-    ## This needs to be a string otherwise gawk fails
-    gsub("[\200-\301\365-\377]+","", text)
+    ## This regexes needs to be strings otherwise gawk fails
+    ## Remove continuation bytes
+    gsub("[\200-\277]+","", text)
+    ## Remove combining diacritical marks
+    gsub("\314[\200-257]","", text)
+    ## Remove combining diacritical marks extended
+    gsub("\341\252[\260-277]","", text)
+    gsub("\341\253[\200-216]","", text)
     return length(text)
 }
 
