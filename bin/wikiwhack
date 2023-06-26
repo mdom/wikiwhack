@@ -106,10 +106,10 @@ function render_text (text,  nr,ol,lines,line,nf,pre_mode,output,result,prefix )
         return result RS
 }
 
-function get( page, filter,  text, cmd ) {
+function get( page, filter,  text, cmd, url ) {
     gsub(/'/,"%27", page)
-    cmd = curl "'" base_url "/wiki/" page ".json?key=" ENVIRON["REDMINE_APIKEY"] "'"
-    if ( filter ) cmd = cmd "|" filter
+    url = "'" base_url "/wiki/" page ".json?key=" ENVIRON["REDMINE_APIKEY"] "'"
+    cmd = curl " " url " | jq -r '" filter "'"
     while ( cmd | getline line > 0 ) {
         if (text) text = text RS line
         else text = line
@@ -132,7 +132,7 @@ function upload_page( page, file,  json, url, cmd ) {
 }
 
 function get_titles (titles,  text) {
-    text = get("index", "jq -r '.wiki_pages|.[]|.title'")
+    text = get("index", ".wiki_pages|.[]|.title")
     return split(text, titles, /\n/)
 }
 
@@ -157,7 +157,7 @@ function tmpfile(  file) {
 }
 
 function get_text (page) {
-    return get(page, "jq -r '.wiki_page|.text'")
+    return get(page, ".wiki_page|.text")
 }
 
 function read_config (  file) {
