@@ -142,7 +142,7 @@ function edit_page (page,  tmp, tmp_) {
     tmp_ = tmpfile()
     print text > tmp
     print text > tmp_
-    system(editor " " tmp " </dev/tty")
+    system(editor " " tmp ")
     if (system("cmp -s " tmp " " tmp_) == 1) {
         upload_page(page, tmp)
     }
@@ -251,8 +251,14 @@ BEGIN {
     else if ( mode == "view" ) {
         page = ARGV[2]
         text = render_text(get_text(page))
-        cmd = "less -R"
-        if (text) printf "%s", text  | cmd
+        if (text) {
+            tmp = tmpfile()
+            cmd = "LESSEDIT='"prog" edit "page"' less -R " tmp
+            print cmd
+            printf "%s", text  > tmp
+            close(tmp)
+            system(cmd)
+        }
         close(cmd)
     }
     else if ( mode == "edit" ) {
