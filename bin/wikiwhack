@@ -161,13 +161,19 @@ function get_text (page) {
     return get(page, ".wiki_page|.text")
 }
 
-function read_config (  file) {
+function read_config (  file, key) {
     if ( ENVIRON["XDG_CONFIG_HOME"] ) 
         file = ENVIRON["XDG_CONFIG_HOME"] "/wikiwhack/wikiwackrc"
     else
         file = ENVIRON["HOME"] "/.wikiwhackrc"
     while ( getline < file > 0 ) {
-        config[$1] = $2
+        sub(/#.*/,"",$0);
+        if (/^[ \t]*$/ ) continue
+        key = $1
+        $1 = $2 = ""
+        sub(/^[ \t]*"?/,"",$0)
+        sub(/"?[ \t]*$/,"",$0)
+        config[key] = $0
     }
     close(file)
 }
@@ -188,6 +194,9 @@ BEGIN {
 
     unicode_aware = 0
     if (length("Köln") == 4 ) unicode_aware = 1
+
+    config["yank_cmd"] = "xclip -i"
+    config["open_cmd"] = "xdg-open"
 
     read_config()
 
@@ -269,9 +278,8 @@ BEGIN {
     else if ( mode == "yank" ) {
         gsub(/'/,"%27", ARGV[2])
         url =  base_url "/wiki/" ARGV[2]
-        cmd = "xclip -i"
-        print url | cmd
-        close(cmd)
+        print url | config["yank_cmd"]
+        close(config["yank_cmd"])
     }
 
     for (idx in TEMPFILES)
