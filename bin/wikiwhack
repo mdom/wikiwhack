@@ -216,6 +216,7 @@ BEGIN {
         "--bind='alt-e:execute:$0 edit {}' " \
         "--bind='alt-v:execute:$0 view {}' " \
         "--bind='alt-y:execute:$0 yank {}' " \
+        "--bind='alt-o:execute:$0 open {}' " \
         "--bind=alt-j:preview-half-page-down " \
         "--bind=alt-k:preview-half-page-up " \
         "--bind=alt-q:abort " \
@@ -280,6 +281,10 @@ BEGIN {
         url =  base_url "/wiki/" ARGV[2]
         print url | config["yank_cmd"]
         close(config["yank_cmd"])
+    }
+    else if ( mode == "open" ) {
+        gsub(/'/,"%27", ARGV[2])
+        system(config["open_cmd"] " " base_url "/wiki/" ARGV[2])
     }
 
     for (idx in TEMPFILES)
