@@ -23,88 +23,89 @@ function utf8len (text) {
     return length(text)
 }
 
-function render_text (text,  nr,ol,lines,line,nf,output,result,prefix ) {
+function render_text (text,  nr,ol,lines,line,nf,output,prefix,word,len) {
 
-        gsub(/\015\012/, "\012", text)
-        gsub(/\015/, "\012", text)
+    gsub(/\015\012/, "\012", text)
+    gsub(/\015/, "\012", text)
 
-        text = decode_entities(text)
+    text = decode_entities(text)
 
-        nr = split(text, lines, "\n")
-        ol = 1
+    nr = split(text, lines, "\n")
+    ol = 1
 
-        for (i=1; i<=nr; i++ ) {
-            line = lines[i]
+    for (i=1; i<=nr; i++ ) {
+        line = lines[i]
 
-            if ( match(line, /^h[0-9]\([^)]+\)\./ )) {
-                sub(/\([^)]+\)/, "", line)
-            }
+        if ( match(line, /^h[0-9]\([^)]+\)\./ )) {
+            sub(/\([^)]+\)/, "", line)
+        }
 
-            if ( match(line, /^h[0-9]\./ )) {
-                output[++ol] =  ""
-                output[++ol] =  bold line normal
-                output[++ol] =  ""
-                continue
-            }
+        if ( match(line, /^h[0-9]\./ )) {
+            output[++ol] =  ""
+            output[++ol] =  bold line normal
+            output[++ol] =  ""
+            continue
+        }
 
-            ## TODO render table
-            if ( match( line, /^[ ]*\|/)) {
-                output[++ol] = line
-                continue
-            }
+        ## TODO render table
+        if ( match( line, /^[ ]*\|/)) {
+            output[++ol] = line
+            continue
+        }
 
-            if ( match( line, /<pre>/)) {
-                do {
-                    output[++ol]=lines[i] 
-                } while (!match(lines[++i], /<\/pre>/) && i <= nr)
-                output[++ol] = lines[i]
-                continue
-            }
+        if ( match( line, /<pre>/)) {
+            do {
+                output[++ol]=lines[i]
+            } while (!match(lines[++i], /<\/pre>/) && i <= nr)
+            output[++ol] = lines[i]
+            continue
+        }
 
-            if ( match( line, /^[ \t]*$/)) {
-                output[++ol] = ""
-                prefix = ""
-                continue
-            }
-
-            if ( match( line, /^\*+[ ]+/)) {
-                prefix = substr(line, 0, RLENGTH)
-                line = substr(line, RLENGTH )
-            }
+        if ( match( line, /^[ \t]*$/)) {
             output[++ol] = ""
-
-            nf = split(line, fields)
-
-            for(j=1; j<=nf; j++) {
-                word = fields[j]
-                len = length(word)
-                if ( len + length(output[ol]) + 1 + length(prefix) > width ) {
-                    ol++
-                }
-                if (output[ol] == "") {
-                    output[ol] = prefix word
-                    prefix = sprintf("%*s", length(prefix), "")
-                }
-                else {
-                    output[ol] = output[ol] " " word
-                }
-            }
+            prefix = ""
+            continue
         }
 
-        ## Remove empty lines from end
-        while (output[ol] == "") ol--
+        if ( match( line, /^\*+[ ]+/)) {
+            prefix = substr(line, 0, RLENGTH)
+            line = substr(line, RLENGTH )
+        }
+        output[++ol] = ""
 
-        last   = ""
-        for (i=1;i<=ol;i++) {
-            if ( !(last == "" && output[i] == "" )) {
-                if (result)
-                    result = result RS output[i]
-                else
-                    result = result output[i]
-                last = output[i]
+        nf = split(line, fields)
+
+        for(j=1; j<=nf; j++) {
+            word = fields[j]
+            len = length(word)
+            if ( len + length(output[ol]) + 1 + length(prefix) > width ) {
+                ol++
+            }
+            if (output[ol] == "") {
+                output[ol] = prefix word
+                prefix = sprintf("%*s", length(prefix), "")
+            }
+            else {
+                output[ol] = output[ol] " " word
             }
         }
-        return result RS
+    }
+
+    ## Remove empty lines from end
+    while (output[ol] == "") ol--
+
+    last = ""
+    text = ""
+    for (i=1;i<=ol;i++) {
+        if ( !(last == "" && output[i] == "" )) {
+            if (text)
+                text = text RS output[i]
+            else
+                text = text output[i]
+            last = output[i]
+        }
+    }
+    return text RS
 }
 
 function get( page, filter,  text, cmd, url ) {
