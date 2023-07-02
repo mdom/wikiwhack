@@ -1,17 +1,25 @@
 #!/usr/bin/awk -f 
 
-function parsehex(hex,  result,i,h) {
-    for(i=0; i<16; i++) {
-        h[sprintf("%x",i)] = i
-        h[sprintf("%X",i)] = i
-    }
+BEGIN {
+    for(N=0; N<16; N++)
+        {  H[sprintf("%x",N)]=N; H[sprintf("%X",N)]=N }
+}
+
+function hex2int(hex, result,i) {
+    if(hex ~ /^0x/) hex=substr(hex,3)
+
     for(i=1; i<=length(hex); i++)
-        result = (result*16) + h[substr(hex, i, 1)]
+        result=result * 16 + H[substr(hex, i, 1)]
+
     return result
 }
 
 function eval_string(text) {
-    ## TODO implement
+    while (match(text, /\\u/)) {
+        text = substr(text, 1, RSTART - 1 ) \
+               sprintf("%c", hex2int(substr(text, RSTART + 2, 4))) \
+               substr(text, RSTART + 6)
+    }
     return text
 }
 
